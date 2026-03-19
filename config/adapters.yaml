@@ -1,0 +1,59 @@
+# 适配器配置文件
+# Adapter Configuration
+
+# 全局配置
+global:
+  enabled: true
+  default_timeout: 30
+  hot_reload: false
+
+# ==========================================
+# HTTP 适配器配置
+# ==========================================
+# http:
+#   order-api:
+#     base_url: https://api.example.com
+#     openapi_path: adapters/http/specs/order-api.yaml
+#     health_url: /health
+#     auth:
+#       type: bearer          # bearer / api_key
+#       token_env: ORDER_API_TOKEN
+#
+#   logistics-api:
+#     base_url: https://logistics.example.com
+#     auth:
+#       type: api_key
+#       header: X-API-Key
+#       key_env: LOGISTICS_API_KEY
+
+# ==========================================
+# MCP 适配器配置
+# ==========================================
+# mcp:
+#   fetch-server:
+#     server_path: adapters/mcp/servers/fetch-server/server.py
+#     transport: stdio
+#
+#   filesystem-server:
+#     server_path: adapters/mcp/servers/filesystem-server/server.py
+#     transport: stdio
+#     root_path: /data
+
+# ==========================================
+# Shell 适配器配置
+# ==========================================
+# shell:
+#   git-tools:
+#     work_dir: ${PROJECT_ROOT}
+#     sandbox: true
+#     allowed_commands:
+#       - git
+#       - npm
+#       - pip
+#
+#   docker-tools:
+#     work_dir: ${PROJECT_ROOT}
+#     sandbox: true
+#     allowed_commands:
+#       - docker
+#       - docker-compose

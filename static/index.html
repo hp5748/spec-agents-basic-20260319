@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Agent - 智能助手</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1 class="logo">Super Agent</h1>
+                <button id="new-chat" class="btn-new-chat" title="新建对话">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="session-info">
+                <span class="session-label">当前会话</span>
+                <span id="session-id" class="session-value">-</span>
+            </div>
+            <div class="history-section">
+                <h3>对话历史</h3>
+                <div id="history-list" class="history-list">
+                    <!-- 历史记录将动态加载 -->
+                </div>
+            </div>
+            <div class="sidebar-footer">
+                <button id="clear-history" class="btn-clear">清空历史</button>
+            </div>
+        </aside>
+
+        <!-- 主聊天区域 -->
+        <main class="chat-main">
+            <!-- 聊天消息区 -->
+            <div id="chat-messages" class="chat-messages">
+                <div class="welcome-message">
+                    <h2>欢迎使用 Super Agent</h2>
+                    <p>我可以帮助你完成各种任务，包括：</p>
+                    <ul>
+                        <li>SQLite 数据库查询</li>
+                        <li>信息检索和分析</li>
+                        <li>对话问答</li>
+                    </ul>
+                    <p class="hint">输入消息开始对话...</p>
+                </div>
+            </div>
+
+            <!-- 输入区域 -->
+            <div class="input-area">
+                <div class="input-container">
+                    <textarea
+                        id="user-input"
+                        placeholder="输入消息..."
+                        rows="1"
+                        autofocus
+                    ></textarea>
+                    <button id="send-btn" class="btn-send" title="发送">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <span id="status" class="status">就绪</span>
+                    <span id="message-count" class="message-count">0 条消息</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/memory.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
