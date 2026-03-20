@@ -2,20 +2,51 @@
 LLM 客户端
 
 支持 OpenAI 兼容 API（如硅基流动、DeepSeek 等）
+支持 Function Calling (tools/tool_calls)
 """
 
 import os
-from typing import Any, Dict, List, Optional, AsyncGenerator
+from typing import Any, Dict, List, Optional, AsyncGenerator, Union
 from dataclasses import dataclass
 import logging
 
 try:
     from openai import AsyncOpenAI
+    from openai.types.chat import ChatCompletionMessageToolCall
 except ImportError:
     AsyncOpenAI = None
+    ChatCompletionMessageToolCall = None
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCall:
+    """工具调用"""
+    id: str
+    function_name: str
+    arguments: str
+
+    @classmethod
+    def from_openai(cls, tool_call: Any) -> "ToolCall":
+        """从 OpenAI tool_call 创建"""
+        return cls(
+            id=tool_call.id,
+            function_name=tool_call.function.name,
+            arguments=tool_call.function.arguments,
+        )
+
+
+@dataclass
+class LLMResponse:
+    """LLM 响应"""
+    content: Optional[str]
+    tool_calls: Optional[List[ToolCall]] = None
+
+    def has_tool_calls(self) -> bool:
+        """是否有工具调用"""
+        return bool(self.tool_calls)
 
 
 @dataclass
@@ -63,8 +94,9 @@ class LLMClient:
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
         **kwargs
-    ) -> str:
+    ) -> LLMResponse:
         """
         发送聊天请求
 
@@ -72,19 +104,40 @@ class LLMClient:
             messages: 消息列表
             temperature: 温度参数
             max_tokens: 最大 token 数
+            tools: 工具列表（Function Calling）
 
         Returns:
-            str: 助手回复
+            LLMResponse: 助手回复（可能包含 tool_calls）
         """
         try:
+            request_params = {
+                "model": self.config.model,
+                "messages": messages,
+                "temperature": temperature or self.config.temperature,
+                "max_tokens": max_tokens or self.config.max_tokens,
+            }
+
+            if tools:
+                request_params["tools"] = tools
+
             response = await self._client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=temperature or self.config.temperature,
-                max_tokens=max_tokens or self.config.max_tokens,
+                **request_params,
                 **kwargs
             )
-            return response.choices[0].message.content
+
+            message = response.choices[0].message
+
+            # 处理工具调用
+            tool_calls = None
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                tool_calls = [
+                    ToolCall.from_openai(tc) for tc in message.tool_calls
+                ]
+
+            return LLMResponse(
+                content=message.content,
+                tool_calls=tool_calls,
+            )
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
             raise

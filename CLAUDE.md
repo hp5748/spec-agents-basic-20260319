@@ -39,6 +39,8 @@ enabled: true
 - `AI2AI/架构设计.md` - 后端的目录结构（目录即架构），以及各个模块的外部特性
 - `AI2AI/接口规范.md` - 服务提供的接口标准
 - `AI2AI/Skills模块说明.md` - 可配置化的Skills模块使用说明
+- `AI2AI/MCP模块说明.md` - 可配置化的MCP模块使用说明
+- `AI2AI/subAgent模块说明.md` - 可配置化的subAgent模块使用说明
 
 ## 6. 其它强制要求
 - 每次开发必须更新readme.md下的使用说明

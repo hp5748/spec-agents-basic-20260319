@@ -7,8 +7,10 @@
 这是一个将 Agent 能力转化为可复用 Skill 的工具集，核心特性：
 
 - **AI 团队协作**：PM、架构师、开发者等多角色协作
-- **通用适配器层**：支持 Python、HTTP、MCP、Shell 四种执行方式
+- **通用适配器层**：支持 Python、HTTP、MCP、SubAgent 四种执行方式
 - **Spec 驱动开发**：Me2AI（用户意图）+ AI2AI（代码状态）分层管理
+- **Agentic 架构**：基于 Function Calling 的智能体，LLM 自主决策工具调用
+- **调用链追踪**：完整的工具调用路径追踪和可视化
 
 ## 项目结构
 
@@ -48,17 +50,21 @@
 │
 ├── skills/                  # Skill 仓库（标准格式）
 │   ├── _skill-template/     # Skill 模板
-│   │   ├── SKILL.md
-│   │   ├── templates/
-│   │   ├── examples/
-│   │   ├── references/
-│   │   └── scripts/
 │   ├── http-example-skill/  # HTTP 适配器示例
 │   ├── mcp-example-skill/   # MCP 适配器示例
 │   ├── shell-example-skill/ # Shell 适配器示例
 │   └── sqlite-query-skill/  # SQLite 查询技能
-│       ├── SKILL.md
-│       └── scripts/executor.py
+│
+├── subagents/               # SubAgent 仓库（自动扫描）
+│   ├── _subagent-template/  # Agent 模板
+│   ├── code-analyzer/       # 代码分析 Agent
+│   └── web-scraper/         # 网页抓取 Agent
+│
+├── .claude/                 # Claude 配置
+│   ├── agents/              # AI 团队角色定义
+│   ├── shared/              # 团队共享资源
+│   ├── mcp.json             # MCP 服务器配置
+│   └── README.md            # 配置说明
 │
 ├── spec/
 │   ├── Me2AI/               # 用户维护的设计文档
@@ -77,24 +83,25 @@
 │   └── adapters.yaml        # 适配器配置
 │
 ├── src/
-│   ├── adapter_manager.py   # 适配器管理器
-│   ├── skill_loader.py      # Skill 资源加载器
 │   ├── llm_client.py        # LLM 客户端
+│   ├── skill_loader.py      # Skill 资源加载器
+│   ├── skill_executor.py    # Skill 执行器
+│   ├── intent/              # 意图识别模块
+│   │   └── recognizer.py
+│   ├── mcp/                 # MCP 模块 ⭐
+│   │   ├── config.py        # 配置加载器（Claude Code 标准）
+│   │   ├── client.py        # MCP 客户端
+│   │   └── transport/       # 传输层
+│   │       ├── stdio.py     # STDIO 传输
+│   │       └── http.py      # HTTP 传输
+│   ├── subagent/            # SubAgent 模块 ⭐
+│   │   ├── config.py        # 目录扫描器
+│   │   ├── base_agent.py    # Agent 基类
+│   │   └── orchestrator.py  # 编排器
 │   ├── agent/               # Agent 模块
-│   │   ├── __init__.py
 │   │   └── stream_agent.py  # 流式 Agent
 │   ├── memory/              # 记忆模块
-│   │   ├── __init__.py
-│   │   ├── conversation.py  # 对话记忆管理
-│   │   └── summarizer.py    # 对话总结器
 │   └── web/                 # Web 模块
-│       ├── __init__.py
-│       ├── main.py          # FastAPI 入口
-│       ├── dependencies.py  # 依赖注入
-│       └── routes/          # 路由
-│           ├── __init__.py
-│           ├── chat.py      # 聊天接口
-│           └── session.py   # 会话接口
 │
 ├── static/                  # 静态资源
 │   ├── index.html           # Web 界面
@@ -770,6 +777,170 @@ quick_actions:
 
 ---
 
-*文档更新时间: 2026-03-19*
+## MCP 和 SubAgent 模块
+
+### MCP 模块
+
+**功能**: 兼容 Claude Code 的 MCP (Model Context Protocol) 配置和客户端
+
+**配置文件**: `.claude/mcp.json`
+
+**核心组件**:
+- `src/mcp/config.py` - 配置加载器（支持用户级和项目级配置）
+- `src/mcp/client.py` - MCP 客户端（管理所有服务器连接）
+- `src/mcp/transport/stdio.py` - STDIO 传输（本地进程）
+- `src/mcp/transport/http.py` - HTTP 传输（远程服务）
+
+**使用示例**:
+```python
+from mcp import MCPClient
+
+# 创建客户端
+client = MCPClient()
+await client.initialize()
+
+# 调用工具
+result = await client.call_tool("filesystem", "read_file", {"path": "./test.txt"})
+
+# 列出工具
+tools = await client.list_tools("filesystem")
+
+# 关闭连接
+await client.shutdown()
+```
+
+**传输方式**:
+- **STDIO**: 启动本地 MCP Server 进程，通过 stdin/stdout 通信
+- **HTTP**: 通过 HTTP 协议连接远程 MCP Server
+
+### SubAgent 模块
+
+**功能**: 支持多 Agent 协作的编排系统
+
+**自动发现**: 扫描 `subagents/` 目录（项目根目录下，与 `skills/` 平级），无需手动注册
+
+**⚠️ 重要**: `subagents/` 目录必须位于项目根目录下，与 `skills/` 目录平级。
+- `src/subagent/config.py` - 目录扫描器和加载器
+- `src/subagent/base_agent.py` - Agent 基类
+- `src/subagent/orchestrator.py` - 编排器（路由、并行执行、链式调用）
+
+**目录结构**:
+```
+subagents/                  # 与 skills 平级
+├── _subagent-template/     # Agent 模板
+├── code-analyzer/          # 代码分析 Agent
+└── web-scraper/            # 网页抓取 Agent
+```
+
+**使用示例**:
+```python
+from subagent import SubAgentOrchestrator, SubAgentInput
+
+# 创建编排器
+orchestrator = SubAgentOrchestrator()
+await orchestrator.initialize()
+
+# 路由到最合适的 Agent
+input_data = SubAgentInput(query="分析这段代码")
+result = await orchestrator.route(input_data)
+
+# 并行执行多个 Agents
+results = await orchestrator.route_parallel(input_data, max_agents=3)
+
+# 链式调用
+result = await orchestrator.chain(input_data, ["agent1", "agent2"])
+
+# 关闭编排器
+await orchestrator.shutdown()
+```
+
+**执行模式**:
+- **路由**: 基于置信度选择最合适的 Agent
+- **并行**: 同时执行多个 Agent 进行多角度分析
+- **链式**: 按顺序执行多个 Agent，前一个的输出作为后一个的输入
+
+### 测试
+
+运行快速测试脚本:
+```bash
+python scripts/test_mcp_subagent.py
+```
+
+查看详细测试报告:
+- `docs/test_report_mcp_subagent.md` - 完整测试报告
+- `docs/test_issues_fix_plan.md` - 问题修复计划
+
+---
+
+## Agentic 架构
+
+### 核心: LLM Function Calling 驱动
+
+系统采用 Agentic 架构，不再使用 IntentRecognizer 进行意图识别，而是让 LLM 自主决策工具调用。
+
+### 工作流程
+
+```python
+用户输入 → StreamAgent.chat_stream()
+    ↓
+1. 构建 messages（包含历史）
+2. 从 ToolRegistry 获取所有工具的 schema
+3. 调用 LLM（带 tools 参数）
+4. 如果 LLM 返回 tool_calls：
+   ├─→ 通过 AdapterFactory 执行工具
+   ├─→ 收集结果
+   └─→ 再次请求 LLM 总结
+5. 流式输出最终响应 + 调用链签名
+```
+
+### 工具注册表
+
+所有工具（Skills/MCP/SubAgent/Custom）统一注册到 ToolRegistry：
+
+```python
+from src.agent.tool_registry import get_global_registry
+
+registry = get_global_registry()
+
+# 注册自定义工具
+@registry.register("my_tool", description="My custom tool")
+def my_function(param1: str) -> str:
+    return f"Hello {param1}"
+
+# 生成 OpenAPI Schema（用于 LLM Function Calling）
+schema = registry.to_openapi_schema()
+```
+
+### 适配器工厂
+
+AdapterFactory 负责路由工具调用到正确的适配器：
+
+```python
+from src.adapters import get_global_factory
+
+factory = get_global_factory()
+await factory.initialize()
+
+# 自动路由到正确的适配器
+response = await factory.route(
+    tool_name="sqlite:query",
+    parameters={"sql": "SELECT * FROM users"},
+    session_id="session_123"
+)
+```
+
+### 调用链追踪
+
+ChainTracker 自动追踪工具调用路径，并在响应末尾添加签名：
+
+```
+[LLM]
+[tool: sqlite:query]
+[tool: code-analyzer]
+```
+
+---
+
+*文档更新时间: 2026-03-20*
 
 大哥，请阅！

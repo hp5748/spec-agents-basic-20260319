@@ -8,7 +8,7 @@ import importlib.util
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .skill_loader import SkillLoader
 
@@ -33,6 +33,10 @@ class SkillResult:
     response: str
     data: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    # 调用链追踪字段
+    source_type: str = "skill"  # "skill", "subagent", "mcp", "llm"
+    source_name: str = ""       # 具体模块名称
+    chain_info: List[str] = field(default_factory=list)  # 完整调用链
 
 
 class SkillExecutor:

@@ -21,12 +21,9 @@ from pathlib import Path
 from adapters.core import (
     AdapterType,
     AdapterConfig,
-    AdapterResult,
-    SkillContext,
     BaseAdapter,
     AdapterFactory,
 )
-from adapters.core.adapter_factory import register_builtin_adapters
 
 
 logger = logging.getLogger(__name__)
@@ -55,8 +52,8 @@ class AdapterManager:
         self._adapters: Dict[str, BaseAdapter] = {}
         self._initialized = False
 
-        # 注册内置适配器
-        register_builtin_adapters()
+        # 创建工厂实例
+        self._factory = AdapterFactory()
 
     async def initialize(self) -> bool:
         """
@@ -71,13 +68,7 @@ class AdapterManager:
         try:
             # 加载配置
             if self._config_path:
-                self._load_config(self._config_path)
-
-            # 初始化所有适配器
-            results = await AdapterFactory.initialize_all()
-            failed = [k for k, v in results.items() if not v]
-            if failed:
-                logger.warning(f"部分适配器初始化失败: {failed}")
+                await self._load_config(self._config_path)
 
             self._initialized = True
             logger.info(f"适配器管理器初始化完成，已加载 {len(self._configs)} 个配置")
@@ -87,7 +78,7 @@ class AdapterManager:
             logger.error(f"适配器管理器初始化失败: {e}")
             return False
 
-    def _load_config(self, config_path: str) -> None:
+    async def _load_config(self, config_path: str) -> None:
         """
         加载配置文件
 
@@ -112,7 +103,7 @@ class AdapterManager:
             return
 
         # 解析各类型适配器配置
-        for adapter_type in [AdapterType.HTTP, AdapterType.MCP, AdapterType.SHELL]:
+        for adapter_type in [AdapterType.MCP, AdapterType.CUSTOM]:
             type_name = adapter_type.value
             type_configs = config.get(type_name, {})
 
@@ -129,11 +120,28 @@ class AdapterManager:
                 # 如果启用则创建实例
                 if adapter_config.enabled:
                     try:
-                        AdapterFactory.get_or_create(adapter_config)
+                        await self._factory.create_adapter(adapter_config)
                     except Exception as e:
                         logger.error(f"创建适配器失败 {name}: {e}")
 
-    def get_adapter_for_skill(self, skill_config: Dict[str, Any]) -> Optional[BaseAdapter]:
+            for name, cfg in type_configs.items():
+                adapter_config = AdapterConfig(
+                    type=adapter_type,
+                    name=name,
+                    enabled=cfg.get("enabled", True),
+                    timeout=cfg.get("timeout", config.get("global", {}).get("default_timeout", 30)),
+                    metadata=cfg,
+                )
+                self._configs[name] = adapter_config
+
+                # 如果启用则创建实例
+                if adapter_config.enabled:
+                    try:
+                        await self._factory.create_adapter(adapter_config)
+                    except Exception as e:
+                        logger.error(f"创建适配器失败 {name}: {e}")
+
+    async def get_adapter_for_skill(self, skill_config: Dict[str, Any]) -> Optional[BaseAdapter]:
         """
         根据 Skill 配置获取适配器
 
@@ -153,7 +161,7 @@ class AdapterManager:
         # 查找已注册的适配器
         adapter_name = adapter_config.get("adapter_name")
         if adapter_name:
-            return AdapterFactory.get_instance(adapter_name)
+            return await self._factory.get_adapter(adapter_name)
 
         # 动态创建适配器
         try:
@@ -162,7 +170,7 @@ class AdapterManager:
                 name=skill_config.get("name", "dynamic"),
                 metadata=adapter_config,
             )
-            return AdapterFactory.create(config)
+            return await self._factory.create_adapter(config)
         except Exception as e:
             logger.error(f"获取适配器失败: {e}")
             return None
@@ -177,15 +185,15 @@ class AdapterManager:
         Returns:
             Optional[BaseAdapter]: 适配器实例
         """
-        return AdapterFactory.get_instance(name)
+        return self._factory._adapters.get(name)
 
     def list_adapters(self) -> List[str]:
         """获取所有已注册的适配器名称"""
-        return list(AdapterFactory._instances.keys())
+        return list(self._factory._adapters.keys())
 
     def list_available_types(self) -> List[str]:
         """获取所有可用的适配器类型"""
-        return AdapterFactory.get_available_types()
+        return [t.value for t in AdapterType]
 
     async def health_check_all(self) -> Dict[str, bool]:
         """
@@ -195,9 +203,10 @@ class AdapterManager:
             Dict[str, bool]: 各适配器的健康状态
         """
         results = {}
-        for name, adapter in AdapterFactory._instances.items():
+        for name, adapter in self._factory._adapters.items():
             try:
-                results[name] = await adapter.health_check()
+                status = await adapter.health_check()
+                results[name] = status.healthy
             except Exception as e:
                 logger.error(f"健康检查失败 {name}: {e}")
                 results[name] = False
@@ -205,7 +214,7 @@ class AdapterManager:
 
     async def cleanup(self) -> None:
         """清理所有适配器"""
-        await AdapterFactory.cleanup_all()
+        await self._factory.shutdown_all()
         self._adapters.clear()
         self._initialized = False
         logger.info("适配器管理器已清理")

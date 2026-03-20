@@ -1,17 +1,28 @@
 """
-流式 Agent
+流式 Agent (Agentic 架构版本)
 
-封装 LLM 客户端，提供流式对话能力。
-支持 Skill 调用（通过意图识别）。
+基于 Function Calling 的智能体，让 LLM 自主决策工具调用。
+废弃 IntentRecognizer，全面拥抱 LLM 驱动。
+
+核心流程：
+  用户输入 → 构建 tools 参数 → LLM 决策
+    ↓
+  有 tool_calls → AdapterFactory 执行 → 收集结果 → 再次请求 LLM 总结
+    ↓
+  无 tool_calls → 直接返回 LLM 响应
 """
 
+import asyncio
+import json
 import logging
-from typing import AsyncGenerator, List, Dict, Optional
+from typing import AsyncGenerator, List, Dict, Optional, Any
 
-from ..llm_client import LLMClient, LLMConfig
-from ..memory import ConversationMemory, get_memory_manager
-from ..intent import IntentRecognizer, IntentResult
-from ..skill_executor import SkillExecutor, SkillContext, SkillResult
+from ..llm_client import LLMClient, LLMConfig, LLMResponse, ToolCall
+from ..memory.conversation import ConversationMemory, get_memory_manager
+from ..memory.shared_state import SharedState
+from ..agent.tool_registry import ToolRegistry, get_global_registry
+from ..adapters.core.factory import AdapterFactory, get_global_factory
+from ..agent.chain_tracker import ChainTracker
 
 
 logger = logging.getLogger(__name__)
@@ -19,12 +30,14 @@ logger = logging.getLogger(__name__)
 
 class StreamAgent:
     """
-    流式 Agent
+    流式 Agent (Agentic 版本)
 
     功能：
-    - 意图识别 → Skill 匹配 → Skill 执行
-    - 无匹配时降级到 LLM 直接响应
-    - 集成记忆管理器
+    - LLM Function Calling 驱动决策
+    - 统一工具注册表管理所有能力
+    - 适配器工厂执行工具
+    - 调用链追踪
+    - 共享状态支持
     """
 
     def __init__(
@@ -32,7 +45,9 @@ class StreamAgent:
         session_id: str,
         llm_client: Optional[LLMClient] = None,
         memory: Optional[ConversationMemory] = None,
-        skills_dir: str = "skills"
+        tool_registry: Optional[ToolRegistry] = None,
+        adapter_factory: Optional[AdapterFactory] = None,
+        project_root: str = ".",
     ):
         """
         初始化流式 Agent
@@ -41,50 +56,62 @@ class StreamAgent:
             session_id: 会话 ID
             llm_client: LLM 客户端（可选）
             memory: 记忆管理器（可选）
-            skills_dir: Skill 目录
+            tool_registry: 工具注册表（可选）
+            adapter_factory: 适配器工厂（可选）
+            project_root: 项目根目录
         """
         self.session_id = session_id
+        self._project_root = project_root
+
+        # 核心组件
         self._llm_client = llm_client or self._create_llm_client()
         self._memory = memory or get_memory_manager()
-        self._skills_dir = skills_dir
+        self._tool_registry = tool_registry or get_global_registry()
+        self._adapter_factory = adapter_factory or get_global_factory()
 
-        # Skill 相关（延迟初始化）
-        self._intent_recognizer: Optional[IntentRecognizer] = None
-        self._skill_executor: Optional[SkillExecutor] = None
-        self._skills_initialized = False
+        # 共享状态
+        self._shared_state = SharedState()
+
+        # 调用链追踪
+        self._chain_tracker = ChainTracker()
+
+        # 初始化状态
+        self._initialized = False
 
     def _create_llm_client(self) -> LLMClient:
         """创建 LLM 客户端"""
         config = LLMConfig.from_env()
         return LLMClient(config)
 
-    def _init_skills(self) -> None:
-        """延迟初始化 Skill 相关组件"""
-        if self._skills_initialized:
+    async def initialize(self) -> None:
+        """初始化 Agent"""
+        if self._initialized:
             return
 
-        try:
-            self._intent_recognizer = IntentRecognizer(self._skills_dir)
-            self._skill_executor = SkillExecutor(self._skills_dir)
-            self._skills_initialized = True
-            logger.info(f"Session {self.session_id}: Skill 系统已初始化")
-        except Exception as e:
-            logger.warning(f"Skill 系统初始化失败: {e}")
-            self._skills_initialized = False
+        logger.info(f"初始化 StreamAgent: {self.session_id}")
+
+        # 初始化适配器工厂（会自动加载所有适配器）
+        await self._adapter_factory.initialize()
+
+        self._initialized = True
 
     async def chat_stream(
         self,
         user_input: str,
-        include_history: bool = True
+        include_history: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         流式对话
 
-        流程：
-        1. 意图识别
-        2. Skill 匹配
-        3. 有匹配 → 执行 Skill → 返回结果
-        4. 无匹配 → 调用 LLM → 返回结果
+        Agentic 流程：
+        1. 构建 messages（包含历史）
+        2. 从 ToolRegistry 获取所有工具的 schema
+        3. 调用 LLM（带 tools 参数）
+        4. 如果 LLM 返回 tool_calls：
+           - 通过 AdapterFactory 执行工具
+           - 收集结果
+           - 再次请求 LLM 总结
+        5. 流式输出最终响应
 
         Args:
             user_input: 用户输入
@@ -93,100 +120,269 @@ class StreamAgent:
         Yields:
             str: 响应文本片段
         """
-        # 初始化 Skill 系统
-        self._init_skills()
+        await self.initialize()
 
-        # 尝试 Skill 匹配
-        skill_result = await self._try_skill(user_input)
+        # 1. 构建消息历史
+        messages = await self._build_messages(user_input, include_history)
 
-        if skill_result and skill_result.success:
-            # Skill 执行成功，直接返回结果
-            full_response = ""
-            for char in skill_result.response:
-                full_response += char
-                yield char
+        # 2. 获取工具 schema
+        tools = self._tool_registry.to_openapi_schema()
 
-            # 保存到记忆
-            await self._save_to_memory(user_input, full_response)
-            return
+        # 3. 调用 LLM（带 Function Calling）
+        response = await self._llm_client.chat(
+            messages=messages,
+            tools=tools if tools else None,
+        )
 
-        # Skill 未匹配或执行失败，走 LLM
-        full_response = ""
-        async for chunk in self._llm_chat_stream(user_input, include_history):
-            full_response += chunk
-            yield chunk
+        # 4. 处理工具调用
+        if response.has_tool_calls():
+            # 执行工具并获取总结
+            async for chunk in self._handle_tool_calls_stream(
+                messages, response.tool_calls, tools
+            ):
+                yield chunk
+        else:
+            # 直接输出 LLM 响应
+            if response.content:
+                for char in response.content:
+                    yield char
 
-        # 保存到记忆
+        # 5. 追加调用链签名
+        signature = self._chain_tracker.format_signature()
+        for char in signature:
+            yield char
+
+        # 6. 保存到记忆
+        full_response = await self._collect_response(response.content or "")
         await self._save_to_memory(user_input, full_response)
 
-    async def _try_skill(self, user_input: str) -> Optional[SkillResult]:
-        """
-        尝试匹配并执行 Skill
+        # 7. 清空调用链
+        self._chain_tracker.clear()
 
-        Args:
-            user_input: 用户输入
-
-        Returns:
-            Optional[SkillResult]: Skill 执行结果，None 表示未匹配
-        """
-        if not self._intent_recognizer or not self._skill_executor:
-            return None
-
-        # 意图识别
-        intent_result = self._intent_recognizer.recognize(user_input)
-
-        if not intent_result.skill_name:
-            logger.debug(f"未匹配到 Skill: {user_input[:50]}...")
-            return None
-
-        # 置信度检查
-        if intent_result.confidence < 0.3:
-            logger.info(
-                f"Skill 置信度过低 ({intent_result.confidence:.2f}), "
-                f"跳过: {intent_result.skill_name}"
-            )
-            return None
-
-        logger.info(
-            f"匹配到 Skill: {intent_result.skill_name} "
-            f"(confidence={intent_result.confidence:.2f})"
-        )
-
-        # 构建 Skill 上下文
-        context = SkillContext(
-            session_id=self.session_id,
-            user_input=user_input,
-            intent=intent_result.matched_intents[0] if intent_result.matched_intents else "",
-            metadata={
-                "matched_keywords": intent_result.matched_keywords
-            }
-        )
-
-        # 执行 Skill
-        result = await self._skill_executor.execute(intent_result.skill_name, context)
-
-        if result.success:
-            logger.info(f"Skill 执行成功: {intent_result.skill_name}")
-        else:
-            logger.warning(f"Skill 执行失败: {result.error}")
-
-        return result
-
-    async def _llm_chat_stream(
+    async def _handle_tool_calls_stream(
         self,
-        user_input: str,
-        include_history: bool
+        messages: List[Dict[str, str]],
+        tool_calls: List[ToolCall],
+        tools: List[Dict[str, Any]],
     ) -> AsyncGenerator[str, None]:
         """
-        调用 LLM 流式响应
+        处理工具调用（流式）
+
+        Args:
+            messages: 原始消息
+            tool_calls: LLM 返回的工具调用
+            tools: 工具 schema
+
+        Yields:
+            str: 响应文本片段
+        """
+        # 添加助手消息（包含 tool_calls）
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function_name,
+                        "arguments": tc.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ],
+        })
+
+        # 执行所有工具调用
+        tool_results = []
+        for tool_call in tool_calls:
+            try:
+                # 解析参数
+                arguments = json.loads(tool_call.arguments)
+
+                # 通过工厂执行
+                result = await self._adapter_factory.route(
+                    tool_name=tool_call.function_name,
+                    parameters=arguments,
+                    session_id=self.session_id,
+                )
+
+                # 记录调用链
+                self._chain_tracker.add(
+                    source_type="tool",
+                    source_name=tool_call.function_name,
+                    confidence=1.0,  # LLM 调用，置信度最高
+                )
+
+                # 构建工具结果消息
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({
+                        "success": result.success,
+                        "data": result.data,
+                        "error": result.error,
+                    }),
+                })
+
+                # 更新共享状态
+                self._shared_state.add_tool_result(
+                    tool_name=tool_call.function_name,
+                    success=result.success,
+                    data=result.data if result.success else None,
+                    error=result.error,
+                )
+
+            except Exception as e:
+                logger.error(f"工具调用失败 {tool_call.function_name}: {e}")
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({
+                        "success": False,
+                        "error": str(e),
+                    }),
+                })
+
+        # 添加工具结果到消息
+        messages.extend(tool_results)
+
+        # 再次请求 LLM 进行总结
+        final_response = await self._llm_client.chat(
+            messages=messages,
+            tools=tools if tools else None,
+        )
+
+        # 流式输出总结
+        if final_response.content:
+            for char in final_response.content:
+                yield char
+
+    async def chat(
+        self,
+        user_input: str,
+        include_history: bool = True,
+    ) -> str:
+        """
+        非流式对话
 
         Args:
             user_input: 用户输入
-            include_history: 是否包含历史
+            include_history: 是否包含对话历史
 
-        Yields:
-            str: 响应片段
+        Returns:
+            str: 完整响应
         """
+        await self.initialize()
+
+        # 构建消息
+        messages = await self._build_messages(user_input, include_history)
+
+        # 获取工具
+        tools = self._tool_registry.to_openapi_schema()
+
+        # 调用 LLM
+        response = await self._llm_client.chat(
+            messages=messages,
+            tools=tools if tools else None,
+        )
+
+        # 处理工具调用
+        if response.has_tool_calls():
+            result = await self._handle_tool_calls(
+                messages, response.tool_calls, tools
+            )
+            full_response = result
+        else:
+            full_response = response.content or ""
+
+        # 追加签名
+        signature = self._chain_tracker.format_signature()
+        full_response += signature
+
+        # 保存
+        await self._save_to_memory(user_input, full_response)
+
+        # 清理
+        self._chain_tracker.clear()
+
+        return full_response
+
+    async def _handle_tool_calls(
+        self,
+        messages: List[Dict[str, str]],
+        tool_calls: List[ToolCall],
+        tools: List[Dict[str, Any]],
+    ) -> str:
+        """处理工具调用（非流式）"""
+        # 添加助手消息
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function_name,
+                        "arguments": tc.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ],
+        })
+
+        # 执行工具
+        tool_results = []
+        for tool_call in tool_calls:
+            try:
+                arguments = json.loads(tool_call.arguments)
+                result = await self._adapter_factory.route(
+                    tool_name=tool_call.function_name,
+                    parameters=arguments,
+                    session_id=self.session_id,
+                )
+
+                self._chain_tracker.add(
+                    source_type="tool",
+                    source_name=tool_call.function_name,
+                    confidence=1.0,
+                )
+
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({
+                        "success": result.success,
+                        "data": result.data,
+                        "error": result.error,
+                    }),
+                })
+
+            except Exception as e:
+                logger.error(f"工具调用失败 {tool_call.function_name}: {e}")
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({"success": False, "error": str(e)}),
+                })
+
+        messages.extend(tool_results)
+
+        # 请求总结
+        final_response = await self._llm_client.chat(
+            messages=messages,
+            tools=tools if tools else None,
+        )
+
+        return final_response.content or ""
+
+    async def _build_messages(
+        self,
+        user_input: str,
+        include_history: bool,
+    ) -> List[Dict[str, str]]:
+        """构建消息列表"""
         messages = []
 
         if include_history:
@@ -198,22 +394,11 @@ class StreamAgent:
                         "content": msg["content"]
                     })
 
-        messages.append({
-            "role": "user",
-            "content": user_input
-        })
-
-        async for chunk in self._llm_client.chat_stream(messages):
-            yield chunk
+        messages.append({"role": "user", "content": user_input})
+        return messages
 
     async def _save_to_memory(self, user_input: str, response: str) -> None:
-        """
-        保存对话到记忆
-
-        Args:
-            user_input: 用户输入
-            response: 助手响应
-        """
+        """保存对话到记忆"""
         await self._memory.add_message(
             session_id=self.session_id,
             role="user",
@@ -225,53 +410,14 @@ class StreamAgent:
             content=response
         )
 
-        # 检查是否需要总结
+        # 检查总结
         summary = await self._memory.check_and_summarize(self.session_id)
         if summary:
             logger.info(f"Session {self.session_id}: 对话已自动总结")
 
-    async def chat(self, user_input: str, include_history: bool = True) -> str:
-        """
-        非流式对话
-
-        Args:
-            user_input: 用户输入
-            include_history: 是否包含对话历史
-
-        Returns:
-            str: 完整响应
-        """
-        # 初始化 Skill 系统
-        self._init_skills()
-
-        # 尝试 Skill 匹配
-        skill_result = await self._try_skill(user_input)
-
-        if skill_result and skill_result.success:
-            await self._save_to_memory(user_input, skill_result.response)
-            return skill_result.response
-
-        # 走 LLM
-        messages = []
-
-        if include_history:
-            history = await self._memory.get_messages(self.session_id)
-            for msg in history:
-                if "role" in msg and "content" in msg:
-                    messages.append({
-                        "role": msg["role"],
-                        "content": msg["content"]
-                    })
-
-        messages.append({
-            "role": "user",
-            "content": user_input
-        })
-
-        response = await self._llm_client.chat(messages)
-        await self._save_to_memory(user_input, response)
-
-        return response
+    async def _collect_response(self, content: str) -> str:
+        """收集完整响应（用于保存）"""
+        return content
 
     async def get_history(self) -> List[Dict]:
         """获取对话历史"""
@@ -280,3 +426,12 @@ class StreamAgent:
     async def clear_history(self) -> None:
         """清除对话历史"""
         await self._memory.clear_session(self.session_id)
+        self._shared_state.clear()
+
+    async def get_shared_state(self) -> Dict[str, Any]:
+        """获取共享状态"""
+        return self._shared_state.to_dict()
+
+    async def get_available_tools(self) -> List[Dict[str, Any]]:
+        """获取可用工具列表"""
+        return self._tool_registry.to_openapi_schema()

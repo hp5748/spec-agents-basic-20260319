@@ -5,5 +5,6 @@ Agent 模块
 """
 
 from .stream_agent import StreamAgent
+from .chain_tracker import ChainTracker, ChainInfo
 
-__all__ = ["StreamAgent"]
+__all__ = ["StreamAgent", "ChainTracker", "ChainInfo"]

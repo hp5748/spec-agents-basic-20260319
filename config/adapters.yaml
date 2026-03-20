@@ -1,14 +1,46 @@
 # 适配器配置文件
 # Adapter Configuration
+#
+# 注意：
+# 1. 此文件保留作为参考示例
+# 2. 实际 MCP 配置请使用 config/mcp.yaml 或 .claude/mcp.json
+# 3. HTTP 和 Shell 适配器当前未实现，保留供未来扩展
 
+# ==========================================
 # 全局配置
+# ==========================================
 global:
+  # 是否启用适配器系统
   enabled: true
+  # 默认超时时间（秒）
   default_timeout: 30
+  # 是否热重载
   hot_reload: false
 
 # ==========================================
-# HTTP 适配器配置
+# MCP 适配器配置（示例）
+# ==========================================
+# 注意：实际配置请使用 config/mcp.yaml
+mcp:
+  # 文件系统服务器示例
+  filesystem:
+    transport: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "/allowed/path"
+
+  # HTTP 请求服务器示例
+  fetch:
+    transport: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-fetch"
+
+# ==========================================
+# HTTP 适配器配置（未实现，保留供扩展）
 # ==========================================
 # http:
 #   order-api:
@@ -27,20 +59,7 @@ global:
 #       key_env: LOGISTICS_API_KEY
 
 # ==========================================
-# MCP 适配器配置
-# ==========================================
-# mcp:
-#   fetch-server:
-#     server_path: adapters/mcp/servers/fetch-server/server.py
-#     transport: stdio
-#
-#   filesystem-server:
-#     server_path: adapters/mcp/servers/filesystem-server/server.py
-#     transport: stdio
-#     root_path: /data
-
-# ==========================================
-# Shell 适配器配置
+# Shell 适配器配置（未实现，保留供扩展）
 # ==========================================
 # shell:
 #   git-tools:
