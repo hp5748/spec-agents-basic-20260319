@@ -19,7 +19,7 @@ from typing import AsyncGenerator, List, Dict, Optional, Any
 
 from ..llm_client import LLMClient, LLMConfig, LLMResponse, ToolCall
 from ..memory.conversation import ConversationMemory, get_memory_manager
-from ..memory.shared_state import SharedState
+from ..memory.shared_state import SharedState, ToolResult
 from ..agent.tool_registry import ToolRegistry, get_global_registry
 from ..adapters.core.factory import AdapterFactory, get_global_factory
 from ..agent.chain_tracker import ChainTracker
@@ -70,7 +70,7 @@ class StreamAgent:
         self._adapter_factory = adapter_factory or get_global_factory()
 
         # 共享状态
-        self._shared_state = SharedState()
+        self._shared_state = SharedState(session_id=self.session_id)
 
         # 调用链追踪
         self._chain_tracker = ChainTracker()
@@ -90,8 +90,8 @@ class StreamAgent:
 
         logger.info(f"初始化 StreamAgent: {self.session_id}")
 
-        # 初始化适配器工厂（会自动加载所有适配器）
-        await self._adapter_factory.initialize()
+        # 适配器工厂无需异步初始化
+        # 适配器会在首次使用时通过 create_adapter 创建
 
         self._initialized = True
 
@@ -125,13 +125,14 @@ class StreamAgent:
         # 1. 构建消息历史
         messages = await self._build_messages(user_input, include_history)
 
-        # 2. 获取工具 schema
-        tools = self._tool_registry.to_openapi_schema()
+        # 2. 获取工具 schema（OpenAI API 期望数组格式）
+        tools_schema = self._tool_registry.to_openapi_schema()
+        tools = tools_schema.get("tools", []) if tools_schema else None
 
         # 3. 调用 LLM（带 Function Calling）
         response = await self._llm_client.chat(
             messages=messages,
-            tools=tools if tools else None,
+            tools=tools,
         )
 
         # 4. 处理工具调用
@@ -179,7 +180,7 @@ class StreamAgent:
         # 添加助手消息（包含 tool_calls）
         messages.append({
             "role": "assistant",
-            "content": None,
+            "content": "",
             "tool_calls": [
                 {
                     "id": tc.id,
@@ -226,11 +227,13 @@ class StreamAgent:
                 })
 
                 # 更新共享状态
-                self._shared_state.add_tool_result(
-                    tool_name=tool_call.function_name,
-                    success=result.success,
-                    data=result.data if result.success else None,
-                    error=result.error,
+                await self._shared_state.add_tool_result(
+                    ToolResult(
+                        tool_name=tool_call.function_name,
+                        success=result.success,
+                        data=result.data if result.success else None,
+                        error=result.error,
+                    )
                 )
 
             except Exception as e:
@@ -278,13 +281,14 @@ class StreamAgent:
         # 构建消息
         messages = await self._build_messages(user_input, include_history)
 
-        # 获取工具
-        tools = self._tool_registry.to_openapi_schema()
+        # 获取工具 schema（OpenAI API 期望数组格式）
+        tools_schema = self._tool_registry.to_openapi_schema()
+        tools = tools_schema.get("tools", []) if tools_schema else None
 
         # 调用 LLM
         response = await self._llm_client.chat(
             messages=messages,
-            tools=tools if tools else None,
+            tools=tools,
         )
 
         # 处理工具调用
@@ -318,7 +322,7 @@ class StreamAgent:
         # 添加助手消息
         messages.append({
             "role": "assistant",
-            "content": None,
+            "content": "",
             "tool_calls": [
                 {
                     "id": tc.id,

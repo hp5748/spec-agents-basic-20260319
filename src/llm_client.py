@@ -120,6 +120,15 @@ class LLMClient:
             if tools:
                 request_params["tools"] = tools
 
+            # 调试日志
+            logger.info(f"LLM 请求参数: model={request_params['model']}")
+            logger.info(f"Messages 数量: {len(messages)}")
+            logger.info(f"Tools 数量: {len(tools) if tools else 0}")
+            if len(messages) > 0:
+                logger.info(f"最后一条消息: {messages[-1]}")
+            if tools and len(tools) > 0:
+                logger.info(f"第一个工具: {tools[0]}")
+
             response = await self._client.chat.completions.create(
                 **request_params,
                 **kwargs

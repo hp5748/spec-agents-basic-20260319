@@ -113,25 +113,28 @@ class Tool:
             if param.required:
                 required.append(param.name)
 
-        # 构建 OpenAPI 格式
-        schema = {
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": {
-                "type": "object",
-                "properties": properties
-            }
+        # 构建 OpenAI Function Calling 格式
+        parameters_schema = {
+            "type": "object",
+            "properties": properties
         }
 
         if required:
-            schema["inputSchema"]["required"] = required
+            parameters_schema["required"] = required
 
-        # 添加类型标识
-        schema["x-tool-type"] = self.type.value
+        schema = {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": parameters_schema
+            }
+        }
 
-        # 添加元数据
+        # 添加自定义元数据（在 function 层级）
+        schema["function"]["x-tool-type"] = self.type.value
         if self.metadata:
-            schema["x-metadata"] = self.metadata
+            schema["function"]["x-metadata"] = self.metadata
 
         return schema
 

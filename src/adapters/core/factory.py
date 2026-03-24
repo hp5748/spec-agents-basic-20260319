@@ -53,6 +53,15 @@ class AdapterFactory:
         # 注册内置适配器
         self._register_builtin_adapters()
 
+    async def initialize(self) -> None:
+        """
+        初始化工厂
+
+        适配器工厂无需异步初始化，此方法为空实现。
+        适配器会在首次使用时通过 create_adapter 创建。
+        """
+        pass
+
     def _register_builtin_adapters(self) -> None:
         """注册内置适配器"""
         self.register_adapter_class(AdapterType.CUSTOM, MockAdapter)
@@ -151,6 +160,24 @@ class AdapterFactory:
         adapter_name = self._tool_mapping.get(tool_name)
 
         if not adapter_name:
+            # 尝试从 ToolRegistry 查找并执行
+            from ...agent.tool_registry import get_global_registry
+            registry = get_global_registry()
+            tool = registry.get(tool_name)
+
+            if tool:
+                # 执行 ToolRegistry 中的工具
+                try:
+                    result = await tool.execute(**parameters)
+                    return ToolResponse(
+                        tool_name=tool_name,
+                        success=result.success,
+                        data=result.data,
+                        error=result.error,
+                    )
+                except Exception as e:
+                    return ToolResponse.from_error(f"工具执行失败: {e}", tool_name)
+
             return ToolResponse.from_error(f"工具未注册: {tool_name}", tool_name)
 
         adapter = self._adapters.get(adapter_name)

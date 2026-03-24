@@ -550,4 +550,58 @@ async def reload_adapter(self, adapter_name: str):
 
 ---
 
-*文档更新时间: 2026-03-20*
+## 八、2026-03-24 修复记录
+
+### 修复的问题
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `'AdapterFactory' object has no attribute 'initialize'` | `AdapterFactory` 缺少 `initialize` 方法 | 添加空实现方法（工厂无需异步初始化） |
+| `Error code: 400 - Input should be a valid list` | `tools` 参数格式错误，传递了整个 schema 而非列表 | 从 schema 中提取 `tools` 列表 |
+
+### AdapterFactory.route() 增强
+
+为支持 `ToolRegistry` 中的工具执行，`route()` 方法增加了 fallback 逻辑：
+
+```python
+async def route(self, tool_name: str, parameters: Dict[str, Any], **kwargs) -> ToolResponse:
+    # 1. 查找适配器
+    adapter_name = self._tool_mapping.get(tool_name)
+
+    if not adapter_name:
+        # 2. 尝试从 ToolRegistry 查找并执行
+        from ...agent.tool_registry import get_global_registry
+        registry = get_global_registry()
+        tool = registry.get(tool_name)
+
+        if tool and tool.handler:
+            result = await tool.execute(**parameters)
+            return ToolResponse(
+                tool_name=tool_name,
+                success=result.success,
+                data=result.data,
+                error=result.error,
+            )
+
+        return ToolResponse.from_error(f"工具未注册: {tool_name}", tool_name)
+
+    # 3. 通过适配器执行
+    adapter = self._adapters.get(adapter_name)
+    # ...
+```
+
+### 验证结果
+
+```python
+# 查询存在的员工
+response = await factory.route("skill.sqlite-query-skill", {"query": "张三"})
+# 返回：张三的详细信息（部门、职位、邮箱等）
+
+# 查询不存在的员工
+response = await factory.route("skill.sqlite-query-skill", {"query": "王二"})
+# 返回：数据库中所有员工列表，提示未找到
+```
+
+---
+
+*文档更新时间: 2026-03-24*

@@ -270,4 +270,81 @@ resources = loader.load("skills/sqlite-query-skill")
 
 ---
 
-*文档更新时间: 2026-03-19*
+## 2026-03-24 更新记录
+
+### 新增模块
+
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| SkillRegistry | `src/agent/skill_registry.py` | 扫描 skills 目录，注册到 ToolRegistry |
+
+### 核心功能
+
+```python
+from src.agent.skill_registry import register_skills_to_registry
+
+# 注册所有 skills 到全局 ToolRegistry
+registered = register_skills_to_registry("skills")
+# 返回: ['sqlite-query-skill']
+
+# 检查注册结果
+from src.agent.tool_registry import get_global_registry
+registry = get_global_registry()
+print(registry.list_tool_names())
+# 输出: ['skill.sqlite-query-skill']
+```
+
+### 修复的问题
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| Skills 未注册到 ToolRegistry | 服务启动时未调用注册 | 在 `web/main.py` lifespan 中调用 `register_skills_to_registry` |
+| Skills 无法执行 | Tool 缺少 handler | 加载 `executor.py` 并创建异步 handler |
+
+### 工作流程（更新后）
+
+```
+服务启动
+    ↓
+web/main.py lifespan
+    ↓
+register_skills_to_registry('skills')
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 扫描 skills/ 目录              │
+│ 2. 解析 SKILL.md 元数据           │
+│ 3. 加载 scripts/executor.py       │
+│ 4. 创建异步 handler               │
+│ 5. 注册到 ToolRegistry            │
+└─────────────────────────────────────┘
+    ↓
+LLM Function Calling
+    ↓
+AdapterFactory.route()
+    ↓
+┌─────────────────────────────────────┐
+│ 1. 查找适配器                      │
+│ 2. 若未找到，检查 ToolRegistry    │
+│ 3. 调用 Tool.handler 执行         │
+│ 4. 返回 ToolResponse              │
+└─────────────────────────────────────┘
+```
+
+### 验证结果
+
+```bash
+# 测试查询
+curl -X POST http://localhost:8000/api/chat/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "查询张三", "stream": false}'
+
+# 返回
+{
+  "session_id": "xxx",
+  "response": "根据查询结果，我找到了张三的信息：\n\n## 张三的个人信息\n..."
+}
+```
+
+---
+
+*文档更新时间: 2026-03-24*

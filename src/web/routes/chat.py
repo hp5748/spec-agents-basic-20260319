@@ -6,6 +6,7 @@
 
 import json
 import logging
+import logging
 from typing import Optional, AsyncGenerator
 
 from fastapi import APIRouter, Depends, Query
@@ -16,6 +17,7 @@ from ..dependencies import get_llm_client, get_session_id, get_stream_agent
 from ...llm_client import LLMClient
 from ...memory import ConversationMemory, get_memory_manager
 from ...agent.stream_agent import StreamAgent
+from ...agent.tool_registry import get_global_registry
 
 
 logger = logging.getLogger(__name__)
@@ -115,4 +117,18 @@ async def chat_message(
     return {
         "session_id": session_id,
         "response": response
+    }
+
+
+@router.get("/tools")
+async def list_tools():
+    """列出所有可用工具"""
+    registry = get_global_registry()
+    tools = registry.list_tool_names()
+    schema = registry.to_openapi_schema()
+
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "schema": schema
     }

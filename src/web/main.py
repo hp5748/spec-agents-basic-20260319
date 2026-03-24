@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse
 
 from .routes import chat_router, session_router
 from ..memory import get_memory_manager
+from ..agent.skill_registry import register_skills_to_registry
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,12 @@ async def lifespan(app: FastAPI):
     # 初始化记忆管理器
     memory_manager = get_memory_manager()
     await memory_manager.initialize()
+
+    # 注册 Skills 到 ToolRegistry
+    from pathlib import Path
+    skills_dir = Path(__file__).parent.parent.parent / "skills"
+    registered = register_skills_to_registry(str(skills_dir))
+    logger.info(f"已注册 {len(registered)} 个 Skills: {registered}")
 
     logger.info("服务初始化完成")
 
