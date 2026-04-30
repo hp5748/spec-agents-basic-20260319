@@ -14,6 +14,7 @@ const App = {
     init() {
         this.cacheElements();
         this.bindEvents();
+        this.setupScrollTracking();
         this.loadSession();
         this.refreshHistory();
     },
@@ -26,6 +27,7 @@ const App = {
             chatMessages: document.getElementById('chat-messages'),
             userInput: document.getElementById('user-input'),
             sendBtn: document.getElementById('send-btn'),
+            stopBtn: document.getElementById('stop-btn'),
             newChatBtn: document.getElementById('new-chat'),
             clearHistoryBtn: document.getElementById('clear-history'),
             sessionIdEl: document.getElementById('session-id'),
@@ -41,6 +43,9 @@ const App = {
     bindEvents() {
         // 发送按钮
         this.elements.sendBtn.addEventListener('click', () => this.handleSend());
+
+        // 停止按钮
+        this.elements.stopBtn.addEventListener('click', () => ChatManager.stopStreaming());
 
         // 回车发送
         this.elements.userInput.addEventListener('keydown', (e) => {
@@ -62,6 +67,33 @@ const App = {
 
         // 清空历史
         this.elements.clearHistoryBtn.addEventListener('click', () => this.clearHistory());
+
+        // 历史列表：事件委托（替代逐项绑定）
+        this.elements.historyList.addEventListener('click', (e) => {
+            const item = e.target.closest('.history-item');
+            if (item) {
+                this.loadSessionById(item.dataset.sessionId);
+            }
+        });
+    },
+
+    /**
+     * 设置智能滚动追踪
+     * 用户上滚时不强制拉回底部
+     */
+    setupScrollTracking() {
+        const el = this.elements.chatMessages;
+        el.addEventListener('scroll', () => {
+            ChatManager._isNearBottom = this.isNearBottom();
+        }, { passive: true });
+    },
+
+    /**
+     * 判断用户是否在底部附近
+     */
+    isNearBottom(threshold = 80) {
+        const el = this.elements.chatMessages;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     },
 
     /**
@@ -128,7 +160,7 @@ const App = {
 
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
-        contentDiv.innerHTML = ChatManager.formatContent(content) || content;
+        contentDiv.innerHTML = renderMarkdown(content) || content;
 
         messageDiv.appendChild(contentDiv);
         this.elements.chatMessages.appendChild(messageDiv);
@@ -144,7 +176,8 @@ const App = {
      * 滚动到底部
      */
     scrollToBottom() {
-        this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
+        const el = this.elements.chatMessages;
+        el.scrollTop = el.scrollHeight;
     },
 
     /**
@@ -174,6 +207,29 @@ const App = {
     },
 
     /**
+     * 显示停止按钮（隐藏发送按钮）
+     */
+    showStopButton() {
+        this.elements.sendBtn.style.display = 'none';
+        this.elements.stopBtn.style.display = 'flex';
+    },
+
+    /**
+     * 显示发送按钮（隐藏停止按钮）
+     */
+    showSendButton() {
+        this.elements.sendBtn.style.display = 'flex';
+        this.elements.stopBtn.style.display = 'none';
+    },
+
+    /**
+     * 流式结束回调
+     */
+    onStreamEnd() {
+        this.showSendButton();
+    },
+
+    /**
      * 新建对话
      */
     newChat() {
@@ -199,7 +255,7 @@ const App = {
     },
 
     /**
-     * 刷新历史列表
+     * 刷新历史列表（事件委托模式，不再逐项绑定）
      */
     refreshHistory() {
         const sessions = MemoryManager.getSessionList();
@@ -217,14 +273,6 @@ const App = {
                 </div>
             `;
         }).join('');
-
-        // 绑定点击事件
-        this.elements.historyList.querySelectorAll('.history-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const sessionId = item.dataset.sessionId;
-                this.loadSessionById(sessionId);
-            });
-        });
     },
 
     /**

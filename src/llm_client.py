@@ -156,26 +156,40 @@ class LLMClient:
         messages: List[Dict[str, str]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
         流式聊天
 
+        Args:
+            messages: 消息列表
+            temperature: 温度参数
+            max_tokens: 最大 token 数
+            tools: 工具列表（Function Calling）
+
         Yields:
             str: 文本片段
         """
         try:
+            request_params = {
+                "model": self.config.model,
+                "messages": messages,
+                "temperature": temperature or self.config.temperature,
+                "max_tokens": max_tokens or self.config.max_tokens,
+                "stream": True,
+            }
+
+            if tools:
+                request_params["tools"] = tools
+
             stream = await self._client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=temperature or self.config.temperature,
-                max_tokens=max_tokens or self.config.max_tokens,
-                stream=True,
+                **request_params,
                 **kwargs
             )
 
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
+                if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
         except Exception as e:
             logger.error(f"LLM 流式调用失败: {e}")

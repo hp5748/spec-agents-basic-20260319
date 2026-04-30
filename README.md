@@ -177,10 +177,13 @@ uvicorn src.web.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### 功能特性
 
-- **流式对话**: 使用 SSE (Server-Sent Events) 实现文字逐字显示
+- **流式对话**: SSE 批量化 + requestAnimationFrame 渲染，丝滑无卡顿
+- **完整 Markdown**: marked.js 渲染，支持代码块、表格、列表、标题等 GFM 语法
 - **浏览器记忆**: 使用 localStorage 存储对话历史，刷新页面后自动恢复
 - **短期记忆**: 后端自动总结长对话（超过 20 条消息时触发）
 - **SQLite 查询**: 支持 SQLite 数据库查询的 Skill
+- **停止生成**: 随时中断流式响应（AbortController）
+- **智能滚动**: 用户上滚时不强制拉回底部
 
 ### API 端点
 
@@ -206,12 +209,21 @@ data: {"type": "done", "session_id": "xxx"}\n\n
 
 ```
 static/
-├── index.html        # 聊天界面
-├── css/style.css     # 样式（黑科技风格）
+├── index.html        # 聊天界面（含 marked.js CDN）
+├── css/style.css     # 暗色主题 + 流式光标 + 平滑滚动
 └── js/
-    ├── app.js        # 主应用逻辑
-    ├── chat.js       # SSE 流式接收
+    ├── app.js        # UI 控制器（智能滚动 + 停止按钮 + 事件委托）
+    ├── chat.js       # 流式核心（rAF 批处理 + SSE 累积 + AbortController）
     └── memory.js     # localStorage 管理
+```
+
+### 前端流式架构
+
+```
+SSE chunk 到达 → 累积到 _pendingChunks（不碰 DOM）
+               → _scheduleRender() 调度 rAF
+               → rAF 回调：marked.js 渲染 → innerHTML（每帧最多 1 次）
+               → 智能滚动（仅在用户位于底部时自动滚动）
 ```
 
 ---
@@ -874,24 +886,37 @@ python scripts/test_mcp_subagent.py
 
 ## Agentic 架构
 
-### 核心: LLM Function Calling 驱动
+### 核心: Agent Loop（参考 OpenClaw 原理）
 
-系统采用 Agentic 架构，不再使用 IntentRecognizer 进行意图识别，而是让 LLM 自主决策工具调用。
+系统采用 Agentic Loop 架构，LLM 自主决策工具调用并支持多轮迭代：
 
-### 工作流程
-
-```python
+```
 用户输入 → StreamAgent.chat_stream()
     ↓
-1. 构建 messages（包含历史）
-2. 从 ToolRegistry 获取所有工具的 schema
-3. 调用 LLM（带 tools 参数）
-4. 如果 LLM 返回 tool_calls：
-   ├─→ 通过 AdapterFactory 执行工具
-   ├─→ 收集结果
-   └─→ 再次请求 LLM 总结
-5. 流式输出最终响应 + 调用链签名
+1. 构建 messages
+   - system prompt（含 Skill 上下文注入）
+   - 对话历史
+   - 用户输入
+    ↓
+2. Agent Loop (while iteration < max_iterations):
+   ├─ 调用 LLM（带 tools 参数）
+   ├─ 如果返回 tool_calls:
+   │   ├─ 实时流式输出工具调用过程
+   │   ├─ AdapterFactory 执行工具
+   │   ├─ 追加结果到 messages
+   │   └─ 继续循环（让 LLM 看到结果后决定下一步）
+   └─ 如果无 tool_calls:
+       └─ 输出最终回答，退出循环
+    ↓
+3. 追加调用链签名 + 保存记忆
 ```
+
+**关键特性**：
+- **多轮迭代**：LLM 调用工具后能看到结果，并决定是否继续调用
+- **Skill Context 注入**：SKILL.md 正文注入系统提示词（双重驱动）
+- **实时流式**：每轮工具调用过程实时推送给前端
+- **Hook Points**：`before/after_model_call`、`before/after_tool_calls`、`on_loop_start/end`
+- **安全限制**：`max_iterations`（默认 10）防止无限循环
 
 ### 工具注册表
 
@@ -941,6 +966,6 @@ ChainTracker 自动追踪工具调用路径，并在响应末尾添加签名：
 
 ---
 
-*文档更新时间: 2026-03-20*
+*文档更新时间: 2026-04-29*
 
 大哥，请阅！

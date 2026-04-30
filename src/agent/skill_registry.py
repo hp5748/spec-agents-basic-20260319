@@ -20,13 +20,13 @@ logger = logging.getLogger(__name__)
 
 def parse_skill_md(skill_md_path: Path) -> Dict[str, Any]:
     """
-    解析 SKILL.md 文件，提取元数据
+    解析 SKILL.md 文件，提取元数据和正文（prose）
 
     Args:
         skill_md_path: SKILL.md 文件路径
 
     Returns:
-        Dict: 技能元数据
+        Dict: 技能元数据，包含 name/description/version/keywords/prose
     """
     content = skill_md_path.read_text(encoding="utf-8")
 
@@ -36,15 +36,20 @@ def parse_skill_md(skill_md_path: Path) -> Dict[str, Any]:
         "version": "1.0.0",
         "keywords": [],
         "examples": [],
+        "prose": "",  # SKILL.md 正文（YAML 之后的内容）
     }
 
     # 解析 YAML frontmatter
     in_frontmatter = False
     frontmatter_lines = []
+    prose_lines = []
 
-    for line in content.split("\n"):
+    lines = content.split("\n")
+    for i, line in enumerate(lines):
         if line.strip() == "---":
             if in_frontmatter:
+                # frontmatter 结束，剩余内容为 prose
+                prose_lines = lines[i + 1:]
                 break
             in_frontmatter = True
             continue
@@ -73,6 +78,11 @@ def parse_skill_md(skill_md_path: Path) -> Dict[str, Any]:
             item = line.strip()[2:].strip()
             if "keywords" in metadata:
                 metadata["keywords"].append(item)
+
+    # 提取 prose（SKILL.md 正文）
+    prose = "\n".join(prose_lines).strip()
+    if prose:
+        metadata["prose"] = prose
 
     # 如果没有从 frontmatter 获取描述，尝试从标题获取
     if not metadata["description"]:
@@ -231,7 +241,8 @@ def register_skills_to_registry(
                     "skill_name": metadata["name"],
                     "version": metadata["version"],
                     "keywords": metadata.get("keywords", []),
-                    "skill_path": str(skill_path)
+                    "skill_path": str(skill_path),
+                    "prose": metadata.get("prose", ""),  # SKILL.md 正文，用于注入系统提示词
                 }
             )
 

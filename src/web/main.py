@@ -47,6 +47,56 @@ async def lifespan(app: FastAPI):
     registered = register_skills_to_registry(str(skills_dir))
     logger.info(f"已注册 {len(registered)} 个 Skills: {registered}")
 
+    # 注册 SubAgents 到 ToolRegistry
+    try:
+        from ..subagent.config import SubAgentLoader
+        from ..agent.tool import Tool, ToolType, ToolParameter, ToolResult
+        from ..agent.tool_registry import get_global_registry
+
+        project_root = str(Path(__file__).parent.parent.parent)
+        loader = SubAgentLoader(project_root)
+        loaded_agents = loader.scan_and_load()
+        registry = get_global_registry()
+
+        for name, agent_instance in loaded_agents.items():
+            # 为每个 SubAgent 创建异步 handler
+            def make_handler(agent):
+                async def handler(**kwargs):
+                    from ...subagent.base_agent import SubAgentInput
+                    input_data = SubAgentInput(
+                        query=kwargs.get("query", str(kwargs)),
+                        session_id=kwargs.get("session_id", "default"),
+                    )
+                    result = await agent.process(input_data)
+                    return ToolResult(
+                        success=result.success,
+                        data=result.response if result.success else None,
+                        error=result.error,
+                    )
+                return handler
+
+            tool = Tool(
+                name=f"subagent.{name}",
+                type=ToolType.SUBAGENT,
+                description=agent_instance.config.description,
+                handler=make_handler(agent_instance),
+                parameters=[
+                    ToolParameter(
+                        name="query",
+                        type="string",
+                        description=f"发送给 {name} Agent 的查询内容",
+                        required=True,
+                    )
+                ],
+            )
+            registry.register_tool(tool)
+            logger.info(f"已注册 SubAgent: {name}")
+
+        if loaded_agents:
+            logger.info(f"已注册 {len(loaded_agents)} 个 SubAgents: {list(loaded_agents.keys())}")
+    except Exception as e:
+        logger.warning(f"SubAgent 注册失败（非致命）: {e}")
+
     logger.info("服务初始化完成")
 
     yield

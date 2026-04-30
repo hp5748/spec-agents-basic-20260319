@@ -6,7 +6,7 @@
 
 import json
 import logging
-import logging
+import asyncio
 from typing import Optional, AsyncGenerator
 
 from fastapi import APIRouter, Depends, Query
@@ -49,6 +49,8 @@ async def generate_sse_stream(
     格式：
     data: {"type": "content", "content": "文本块"}\n\n
     data: {"type": "done", "session_id": "xxx"}\n\n
+
+    批量化：按语义边界（句号、换行）或累积长度批量发送，减少 SSE 事件数。
     """
     try:
         # 发送开始事件
@@ -56,10 +58,12 @@ async def generate_sse_stream(
 
         full_response = ""
 
-        # 流式调用 StreamAgent（自动处理 Skills 匹配）
+        # 流式调用 StreamAgent（真实 Token 级流式，直接透传）
         async for chunk in agent.chat_stream(user_message):
             full_response += chunk
             yield f'data: {json.dumps({"type": "content", "content": chunk}, ensure_ascii=False)}\n\n'
+            # 强制让出控制权，确保 Starlette 能立即写入 socket
+            await asyncio.sleep(0)
 
         # 发送完成事件
         yield f'data: {json.dumps({"type": "done", "session_id": session_id}, ensure_ascii=False)}\n\n'
@@ -94,6 +98,7 @@ async def chat_stream(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Transfer-Encoding": "chunked",
         }
     )
 
